@@ -13,8 +13,7 @@ import ee
 
 # v1: use land cover feature
 # v2a: use EVI amplitude etc from MCD12Q2.006
-# v2b: use land cover only but from collection 6 of MODIS
-model_snapshot_version = "post_mids_v2b"
+model_snapshot_version = "post_mids_v2a"
 # Create this directory ahead of time
 base_asset_directory = "users/deepakna/w210_irrigated_croplands"
 #
@@ -271,26 +270,20 @@ def get_selected_features_image(model_year):
         features_with_lonlat_image = ee.Image.cat(features_image, lonlat_image)
         return features_with_lonlat_image
 
+    image_path = f"{model_snapshot_path_prefix}_features_{model_year}"
+    try:
+        _ = ee.data.getAsset(image_path)   # Forces exception
+        # No exception, load the image
+        features_image = ee.Image(image_path)
+        return features_image
+    except ee.ee_exception.EEException:
+        print(f"could not read features image {image_path} (probably not created yet)")
+
     regions = ["world1", "world2"]
     regional_features = list(map(get_selected_features_in_region, regions))
     assert (len(regions) == 2)
     one_image = ee.Image(regional_features[0]).blend(regional_features[1])
     return one_image
-
-
-def export_asset_image_to_drive(asset_id):
-    image = ee.Image(asset_id)
-    folder = asset_id.replace('/', '_')
-    print(f"Downloading to gdrive: {folder}")
-    task = ee.batch.Export.image.toDrive(
-        image=image.toFloat(),
-        folder=folder,
-        description=asset_id.replace('/', '_'),
-        crs=model_projection,
-        scale=model_scale
-    )
-    task.start()
-    wait_for_task_completion([task], True)
 
 
 def export_asset_table_to_drive(asset_id):
@@ -306,31 +299,6 @@ def export_asset_table_to_drive(asset_id):
         folder=folder,
         description=folder,
         fileFormat='GeoJSON'
-    )
-    task.start()
-    wait_for_task_completion([task], True)
-
-
-def sample_to_image(sample_points, properties):
-    images = list(map(lambda prop: sample_points
-        .filter(ee.Filter.notNull([prop]))
-        .reduceToImage([prop], ee.Reducer.first())
-        .select(['first'], [prop]),
-        properties
-    ))
-    return ee.Image.cat(*images).select(properties, get_selected_features())
-
-
-def export_sample_to_image():
-    sample_points = ee.FeatureCollection("users/deepakna/smote_training_sample_table_10000")
-    properties = ['X', 'Y', 'tmmx', 'vap', 'vpd', 'Albd_ns', 'ECnp_tv', 'RtMst_n', 'SWdwn__', 'Tvg_tvg', 'NDVI']
-    sample_image = sample_to_image(sample_points, properties)
-    task = ee.batch.Export.image.toAsset(
-        image=sample_image,
-        description="SampleImageExport",
-        assetId="users/deepakna/smote_training_sample_image_10000",
-        crs=model_projection,
-        scale=model_scale
     )
     task.start()
     wait_for_task_completion([task], True)

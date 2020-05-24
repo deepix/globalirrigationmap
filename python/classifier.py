@@ -89,34 +89,14 @@ def create_classifier(features_image, labels_image, sample_points):
     return classifier
 
 
-do_smote = False
-def create_classifier_for_smote():
-    def rename_properties(f):
-        cur_list = ['BLABEL', 'X', 'Y', 'tmmx', 'vap', 'vpd', 'Albd_ns', 'ECnp_tv', 'RtMst_n', 'SWdwn__', 'Tvg_tvg', 'NDVI']
-        new_list = ['BLABEL'] + feature_list
-        return f.select(cur_list, new_list)
-    training_samples = ee.FeatureCollection("users/deepakna/smote_training_sample_table_10000")
-    feature_list = get_selected_features()
-    classifier = train_model(training_samples.map(rename_properties), feature_list)
-    # Model times out: uncomment if you like
-    # if labels_image is not None:
-    #     assess_model(classifier, split['test_partition'])
-    # GEE doesn't allow us to save a model so we always train the model
-    classifier = classifier.setOutputMode('PROBABILITY')
-    return classifier
-
-
 def build_worldwide_model():
-    if do_smote:
-        classifier = create_classifier_for_smote()
-    else:
-        num_samples = 10000  # 10000 samples to train the model
-        sample_points = get_worldwide_sample_points(num_samples)
-        training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
-        features_list = get_selected_features()
-        features_image = training_image.select(features_list)
-        labels_image = get_binary_labels(training_image.select("LABEL"))
-        classifier = create_classifier(features_image, labels_image, sample_points)
+    num_samples = 10000  # 10000 samples to train the model
+    sample_points = get_worldwide_sample_points(num_samples)
+    training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
+    features_list = get_selected_features()
+    features_image = training_image.select(features_list)
+    labels_image = get_binary_labels(training_image.select("LABEL"))
+    classifier = create_classifier(features_image, labels_image, sample_points)
     return classifier
 
 
