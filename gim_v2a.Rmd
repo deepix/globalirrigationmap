@@ -1,0 +1,385 @@
+---
+title: "Sample data from GEE for irrigated cropland analysis"
+output:
+  pdf_document: default
+  pdf: default
+  html_document:
+    df_print: paged
+---
+
+### Introduction to the dataset
+
+We can read the GeoJSON below if we have the library.  Otherwise we can read the CSV which contains all the features and the label.
+
+This is obtained from a worldwide sample of 10000 points, for the year 2002.  The points were obtained proportionately on a per-region basis, so smaller continents such as Australia have smaller number of samples than say Asia or Africa.  The regions were:
+
+```javascript
+var worldRegions = [
+  "North America",
+  "Central America",
+  "South America",
+  "EuropeSansRussia",
+  "EuropeanRussia",
+  "Africa",
+  "SW Asia",
+  "Central Asia",
+  "N Asia",
+  "E Asia",
+  "SE Asia",
+  "S Asia",
+  "Australia",
+  // and New Zealand and Papua New Guinea from Oceania
+];
+```
+
+The features come from the following datasets:
+
+ * [MODIS MOD13A2](https://developers.google.com/earth-engine/datasets/catalog/MODIS_006_MOD13A2) (NDVI, EVI)
+ * [MODIS MOD09GA_NDWI](https://developers.google.com/earth-engine/datasets/catalog/MODIS_MOD09GA_NDWI) (NDWI)
+ * [NASA GRACE](https://developers.google.com/earth-engine/datasets/catalog/NASA_GRACE_MASS_GRIDS_LAND) (groundwater data)
+ * [TERRACLIMATE](https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE) (climate data)
+ * [NASA GLDAS](https://developers.google.com/earth-engine/datasets/catalog/NASA_GLDAS_V021_NOAH_G025_T3H) (land data)
+ * [NASA FLDAS](https://developers.google.com/earth-engine/datasets/catalog/NASA_FLDAS_NOAH01_C_GL_M_V001) (famine data)
+
+See the [GEE script](https://code.earthengine.google.com/?scriptPath=users%2Fdeepakna%2Fmids_w210_irrigated_cropland%3Av3%2Ffeatures.js) to understand the features better.
+
+```{r}
+library(sf)
+library(caret)
+library(dplyr)
+library(corrplot)
+library(e1071)
+library(kernlab)
+library(knitr)
+library(kableExtra)
+library(randomForest)
+library(doParallel)
+library(pROC)
+library(tibble)
+library(psych)
+
+set.seed(10)
+registerDoParallel(4)
+getDoParWorkers()
+```
+
+### EDA
+
+Let us read and have a first look at the data.
+
+```{r}
+sdf <- read_sf("data/sample_v2a.geojson")
+```
+
+```{r}
+kable(summary(sdf))
+```
+
+Let us first get rid of some unwanted columns
+
+```{r}
+df <- as.data.frame(sdf)
+df <- dplyr::select(df, c(-"id", -"geometry"))
+```
+
+Let us first check if there are any columns with very little variance:
+
+```{r}
+low.var <- nearZeroVar(df, names = TRUE)
+low.var
+```
+
+We don't want to remove the label, but we can remove the constant!
+
+```{r}
+# final.low.var <- stri_remove_empty(str_remove(low.var, "LABEL"))
+# df <- dplyr::select(df, -all_of(final.low.var))
+df <- dplyr::select(df, -c("constant"))
+```
+
+Let's check if there are any missing values, because we already encoded them with -999 during sampling:
+
+```{r}
+sum(is.na(df))
+```
+
+There are no missing values.  This is good.
+
+We will not preprocess the features at the moment, because some models are robust to skews and non-normality.  If a model needs it, we will apply pre-processing as needed.
+
+```{r}
+labels.df <- dplyr::select(df, LABEL)
+features.df <- dplyr::select(df, -LABEL)
+```
+
+Let's check for highly correlated features.
+
+```{r}
+correlations <- cor(features.df)
+high.corr <- findCorrelation(correlations, cutoff = 0.9, names = TRUE)
+high.corr
+```
+
+Let's remove them.
+
+```{r}
+high.corr <- findCorrelation(correlations, cutoff = 0.9)
+#features.df <- features.df[-c(high.corr)]
+```
+
+```{r}
+correlations <- cor(features.df)
+#correlations
+corrplot(correlations)
+```
+
+Let's look at the label column and create a factor variable for our models.
+
+```{r}
+# t <- df %>% select(CanopInt_inst) %>% filter(CanopInt_inst != -9999)
+# 
+# summary(df$CanopInt_inst)
+# hist(df$CanopInt_inst)
+# summary(t)
+# 
+# t2 <- df %>% select(X, Y, EVI_Amplitude_1) %>% filter(EVI_Amplitude_1 != -9999)
+
+```
+
+```{r}
+hist(labels.df$LABEL, main = "Histogram: Area irrigated (ha)", xlab = "Area irrigated in 8kmx8km square")
+```
+
+This is a very skewed distribution.  Let's try a log transform.  Because a lot of the values are 0, we'll use log1p().
+
+```{r}
+hist(log(labels.df$LABEL), main = "log of irrigated area (Ha)")
+log.labels.df <- data.frame(LABEL = log1p(labels.df$LABEL))
+hist(log.labels.df$LABEL, main = "log1p of irrigated area (Ha)")
+```
+
+Let's decide where to draw our label.  It represents the area irrigated in a cell of 5 arc min x 5 arc min.  This is 8.3km at the equator, therefore the cell is 8.3 x 8.3 = 68.89 square kilometers.  Since 1 square kilometer represents 100 hectares, we can have, at most, 6889 hectares of irrigated land (at the equator).
+
+```{r}
+labels.df %>% dplyr::select(LABEL) %>% filter(LABEL > 6889) %>% count()
+```
+
+The labels look correct.
+
+For our model, let us detect irrigation > 5%.
+
+```{r}
+class.thres <- 1 # log(0.05 * 6889)
+hist(log.labels.df[log.labels.df$LABEL < class.thres,], main = "Below threshold", xlab = "log1p(haIrrigated)")
+hist(log.labels.df[log.labels.df$LABEL >= class.thres,], main = "Above threshold", xlab = "log1p(haIrrigated)")
+```
+
+There are very few values below 1.  To start with, we will have a binary classification model.  Let's set all log1p-labels greater or equal to 1 as "irrigated", and values less than that as "not irrigated".  We want to go as high as possible on this limit, but not lose too much data in the process.
+
+```{r}
+labels.df$BLABEL <- ifelse(log.labels.df$LABEL < class.thres, "nonirrigated", "irrigated")
+labels.df$BLABEL <- factor(labels.df$BLABEL, levels = c("nonirrigated", "irrigated"))
+```
+
+Let's look for class imbalance.
+
+```{r}
+irrigated.count <- as.numeric(labels.df %>% filter(BLABEL == "irrigated") %>% count())
+nonirrigated.count <- as.numeric(labels.df %>% filter(BLABEL == "nonirrigated") %>% count())
+irrigated.count / (irrigated.count + nonirrigated.count)
+```
+
+```{r}
+sdf.copy <- sdf
+sdf.copy$logLabel <- log1p(sdf.copy$LABEL)
+sdf.copy %>% dplyr::select('logLabel') %>% dplyr::filter(logLabel >= class.thres) %>% plot(breaks = 0:9)
+```
+
+About 20% of the data is in the irrigated class.  We'll first use the data as it is to train a model and see if it generalizes, before we do any resampling or reweighting.
+
+We will first try to fit a few different models with all features and see how they perform.  Then, we will do some feature selection and re-run the models.  We will select the best model.  We will do all of this in a 5-fold cross-validation set.  We will reserve 10% of the data for our final model.  This will be our test set.  We will run our model only once on it, and report our final results on it as well.
+
+### Creating data split
+
+We will use a 90:10 split for training and test sets, and 5-fold cross-validation on the training set.
+
+```{r}
+# we keep only BLABEL
+model.df <- cbind(features.df, labels.df) %>% dplyr::select(-LABEL)
+partition <- createDataPartition(y = model.df$BLABEL, p = 0.8, list = FALSE)
+training.df = model.df[partition, ]
+test.df <- model.df[-partition, ]
+```
+
+Next, we will fit three different models.  Let us set up a training-control function that does not vary across the models.  It allows us to train and evaluate them uniformly.
+
+```{r}
+# Accuracy, kappa, AUC
+# Adapted from Kuhn2013
+fiveStats <- function(...) c(twoClassSummary(...), defaultSummary(...))
+train.ctrl <- trainControl(method = "cv", number = 5, savePredictions = TRUE, summaryFunction = fiveStats, classProbs = TRUE, allowParallel = TRUE)
+model.metric <- "Kappa"
+```
+
+### Random forest
+
+Since individual models can be quirky, we can try an ensemble instead.  We will try some tuning as well.
+
+Random forests are robust to data ranges, so we don't do any preprocessing.
+
+```{r}
+model.rf <- train(BLABEL ~ ., data = training.df, method = "rf", metric = model.metric, trControl = train.ctrl)
+kable(model.rf$results)
+```
+
+```{r}
+indices <- model.rf$pred$mtry == model.rf$bestTune$mtry
+ref <- model.rf$pred$obs[indices]
+pred.probs <- model.rf$pred$irrigated[indices]
+roc.rf <- roc(ref, pred.probs, levels = rev(levels(model.rf$pred$pred)))
+plot(roc.rf)
+```
+
+```{r}
+kable(model.rf$bestTune)
+```
+
+```{r}
+thresh <- coords(roc.rf, x = "best", best.method = "closest.topleft")
+kable(thresh)
+```
+
+### Selecting features
+
+Let's retrain the random forest model, this time with the recommended 1000 trees and a tuning length of 10.  We will then look at feature importances.
+
+```{r}
+model.rf2 <- train(BLABEL ~ ., data = training.df, method = "rf", metric = model.metric, trControl = train.ctrl, tuneLength = 10, ntree = 1000)
+kable(model.rf2$results)
+```
+
+```{r}
+plot(varImp(model.rf2))
+```
+
+```{r}
+plot(model.rf2)
+varImp(model.rf2)
+```
+
+We will start adding variables one by one based on the chart above, until we get close enough to the best kappa we have with all the variables in place.
+
+```{r}
+# want it at least 0.60
+# EVI_Amplitude_1, Y: 0.33
+# + pet_period4: 0.50
+# + LC_type2: 0.54
+# + vap_period2: 0.58
+# + aet_period4: 0.58
+# + vap_period3: 0.59
+# + LC_Type1: 0.58
+# + X: 0.60
+
+final.features.df <- training.df %>% dplyr::select(BLABEL, Y, LC_Type2, EVI_Amplitude_1, LC_Type1, pet, tmmx, X, Tveg_tavg, Albedo_inst, vpd)
+model.rf3 <- train(BLABEL ~ ., data = final.features.df, method = "rf", metric = model.metric, trControl = train.ctrl, tuneLength = 10, ntree = 1000)
+kable(model.rf3$results)
+```
+
+```{r}
+plot(varImp(model.rf3, scale = FALSE))
+```
+
+We get a best kappa value of 0.61 with mtry=4.  We will select these features, based on the feature importance and above experimentation.
+
+* Tveg_tavg: Transpiration (GLDAS)
+* Y: latitude: a proxy for latitude-specific features, such as amount of sunlight, prevailing winds, etc.
+* tmmx: Maximum temperature (TERRACLIMATE)
+* vpd: Vapor pressure deficit.  It is the difference (deficit) between the amount of moisture in the air and how much moisture the air can hold when it is saturated. (TERRACLIMATE)
+* vap: Vapor pressure (TERRACLIMATE)
+* RootMoist_inst: Root zone soil moisture (GLDAS)
+* X: longitude: a proxy for longitude-specific features
+* Albedo_inst: Fraction of light reflected back to space.  Water reflects less light compared to land. (GLDAS)
+* NDVI: Green-leaf vegetation (MODIS)
+* Psurf_f_inst: Atmospheric pressure (GLDAS)
+* ECanop_tavg: Canopy water evaporation (GLDAS)
+* ESoil_tavg: Direct evaporation from bare soil (GLDAS)
+* Wind_f_inst: Wind speed (GLDAS)
+* pdsi: Palmer drought severity index (TERRACLIMATE)
+* SWdown_f_tavg: Downward short-wave radiation flux (GLDAS)
+
+We can also find the best threshold:
+
+```{r}
+indices <- model.rf3$pred$mtry == model.rf3$bestTune$mtry
+ref <- model.rf3$pred$obs[indices]
+pred.probs <- model.rf3$pred$irrigated[indices]
+roc.rf3 <- roc(ref, pred.probs, levels = rev(levels(model.rf3$pred$pred)))
+plot(roc.rf3)
+thresh <- coords(roc.rf3, x = "best", best.method = "closest.topleft")
+kable(thresh)
+```
+
+Setting a threshold of 0.2455 gives us good specificity as well as sensitivity.
+
+```{r}
+model.thres <- 0.2455
+```
+
+We can compare against the original ROC curve as well:
+
+```{r}
+plot(roc.rf, col = "orange", main = "ROC Curves")
+plot(roc.rf3, col = "green", add = TRUE)
+legend("bottomright", legend = c("Original RF", "Feature selected RF"), col = c("orange", "green"), lwd=2)
+```
+
+The new model does comparably, with far fewer features.
+
+### Model Assessment
+
+Let's look at how the model performs on each class and look at where on the map it misclassifies.
+
+```{r}
+sdf.copy2 <- sdf.copy
+model.pred <- predict(model.rf3, newdata = sdf.copy2, type = "prob")
+model.pred$PRLABEL <- ifelse(model.pred$irrigated > model.thres, model.pred$irrigated - model.thres, 0)
+model.pred$BLABEL <- as.numeric(sdf.copy2$logLabel > class.thres)
+model.pred$labelDiff <- model.pred$PRLABEL - model.pred$BLABEL
+summary(model.pred)
+sdf.copy2 <- cbind(sdf.copy2, model.pred$labelDiff)
+# -1: pred=0, lab=1: false negative (blue)
+# 1: pred=1, lab=0: false positive (red)
+sdf.copy2 %>% select("model.pred.labelDiff") %>% plot(main = "Model assessment")
+```
+
+It seems the model has many more false positives (reds) than false negatives (blues).  The false positives are concentrated in China, Ukraine, northern Mexico and northern American prairies.  The model resolution of 8km may be at play here, because it cannot pick up small amounts of irrigation without some noise.  On the other hand, it may also mean we have some underreporting in the labels, especially because they were compiled using government records.
+
+Let's now run it on our test set for our final assessment:
+
+```{r}
+pred.vec <- predict(model.rf3, newdata = test.df)
+pred.df <- data.frame(pred = factor(pred.vec, levels = c("nonirrigated", "irrigated")), BLABEL = test.df$BLABEL)
+confusionMatrix(pred.df$pred, pred.df$BLABEL)
+```
+
+Let's check the predictions for calibration.
+
+```{r}
+cal.pred <- predict(model.rf3, newdata = test.df, type = "prob")
+cal.df <- data.frame(BLABEL = test.df$BLABEL, pred = cal.pred$nonirrigated)
+cal.obj <- calibration(BLABEL ~ pred, data = cal.df)
+plot(cal.obj, xlab = "Predicted probability", ylab = "Actual probability")
+```
+
+From the plot, we see that the predictions are above the diagonal at the upper ranges.  This means the model is *under-forecasting* at those ranges, i.e. the actual probabilities are higher than what the model is predicting.  Similarly, the model is *over-forecasting* at mid ranges, i.e. the actual probabilities are lower than what the model is predicting.
+
+Let us use calibrate the model results, by stacking a simple logistic regression model on top of it.
+
+```{r}
+# TODO: split into train and test
+cal.glm <- glm(BLABEL ~ pred, data = cal.df, family = binomial(link = "logit"))
+final.pred <- predict(cal.glm, cal.df)
+cal2.df <- data.frame(BLABEL = cal.df$BLABEL, pred = 1 - final.pred)
+cal2.obj <- calibration(BLABEL ~ pred, data = cal2.df)
+plot(cal2.obj, xlab = "Predicted probability", ylab = "Actual probability")
+```
