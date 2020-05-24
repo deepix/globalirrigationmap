@@ -101,6 +101,16 @@ More often, you will want to add or change features to your model and see how it
 2. Re-run features_exporter.py to create the new feature store.
 3. Update model parameters, if required, in classifier.py.  Re-run classifier.py. 
 
+## Improving Resolution
+
+The model is currently at 8km spatial resolution.  This is the same as the one for the labels that come from MIRCA2000 dataset.
+
+If you want to improve the resolution to say 4km or 1km, there are two challenges.
+
+First, there is the "data science" challenge of how to apply the 8km labels to a smaller parcel of land.  You have to apply intelligence, such as use the label on a part of the original square that looks like cropland, based on some of its features, say the vegetation index.
+
+Second, there is the engineering challenge, because data grows on a quadratic scale - i.e., you have an O(N<sup>2</sup>) problem at hand.  You will likely run into GEE errors.  When that happens, you should start by reduce the regions processed in parallel by feature extractor component in `get_selected_features_image()` function.  For 8km scale, it splits the world into 2 collections of smaller regions.  The same function is also used by the classifier, so your changes will automatically carry over to that component.
+
 ## Components
 
 ### Random Sampler
@@ -145,11 +155,21 @@ Code: classifier.py
 
 The maps are now ready to be consumed.  We write a few simple JavaScript applications and make them available on GEE as "apps".
 
+These apps are available in a separate repository so that we can commit them directly to GEE.  To reduce extra complexity, we don't use the git "submodule" feature.
+
+[Apps repository](https://github.com/deepix/gimApps/)
+
 These apps allow interaction, zooming, and overlay with satellite imagery for validation.  GEE also allows us to customize the map style, introduce UI elements such as buttons and menus, and generally makes for a rich user experience.
 
 If you wonder why we did not use JavaScript for the earlier stages, it is because there is no way to invoke JavaScript API from the developer's computer.  You can have a copy of the code itself, but running anything requires pressing a button on the GEE code editor.  Python API allow us to invoke GEE from the script directly.
 
 It is also worth mentioning that any JavaScript code you write for GEE needs to be fast: it has a 5-minute timeout, but practically it has to run within milliseconds or the user will notice a lag.  This timeout does not apply to code running under Python API.
+
+## Labels Used
+
+We use irrigation labels from the MIRCA2000 dataset.  The labels represent maximum area equipped for irrigation, on a global 8km by 8km grid.  We created a GeoTIFF file from it.  In addition to the original data, we also created a band that represents low, medium or high irrigation.  We do not use this band, opting for the original data instead.
+
+Our labels GeoTIFF image is available in this repository.
 
 ## Tips, Warnings and Best Practices
 
@@ -171,3 +191,4 @@ Following are some ideas for further development on this project:
 2. Add some code and plots for EDA of individual features.
 3. Feature engineering: there is ample scope to add more features, such as monthly values instead of an annual mean, or also adding variance in addition to mean.
 4. Create a time series movie of irrigation changing over time from 2000 to 2018.
+5. Improve the resolution for the maps from the current 8km.
