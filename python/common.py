@@ -22,6 +22,7 @@ base_asset_directory = "users/deepakna/w210_irrigated_croplands"
 #
 model_snapshot_path_prefix = f"{base_asset_directory}/{model_snapshot_version}"
 model_projection = "EPSG:4326"
+num_samples = 20000
 
 # CONFIGURATION flags
 label_type = "MIRCA2K"  # or GFSAD1000

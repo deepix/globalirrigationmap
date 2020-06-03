@@ -5,7 +5,7 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_selected_features_image, model_snapshot_path_prefix,
-                    get_selected_features, get_binary_labels, model_projection)
+                    get_selected_features, get_binary_labels, model_projection, num_samples)
 from sampler import get_worldwide_sample_points
 
 
@@ -90,8 +90,7 @@ def create_classifier(features_image, labels_image, sample_points):
 
 
 def build_worldwide_model():
-    num_samples = 20000  # 10000 samples to train the model
-    sample_points = get_worldwide_sample_points(num_samples)
+    sample_points = get_worldwide_sample_points()
     training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
     features_list = get_selected_features()
     features_image = training_image.select(features_list)

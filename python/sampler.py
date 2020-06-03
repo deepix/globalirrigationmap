@@ -1,6 +1,6 @@
 import ee
 from common import (region_boundaries, model_scale, wait_for_task_completion, model_projection, base_asset_directory,
-                    export_asset_table_to_drive)
+                    export_asset_table_to_drive, num_samples)
 
 
 world_regions = [
@@ -47,7 +47,7 @@ def read_sample(asset_name):
         return None
 
 
-def get_worldwide_sample_points(num_samples):
+def get_worldwide_sample_points():
     asset_name = f'{base_asset_directory}/samples_{num_samples}'
     sample_fc = read_sample(asset_name)
     if sample_fc:
@@ -102,8 +102,7 @@ def get_worldwide_sample_points(num_samples):
 
 def main():
     ee.Initialize()
-    num_samples = 10000
-    get_worldwide_sample_points(num_samples)
+    get_worldwide_sample_points()
     export_asset_table_to_drive(f'{base_asset_directory}/samples_{num_samples}')
 
 
