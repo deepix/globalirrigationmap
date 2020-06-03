@@ -65,4 +65,4 @@ def main(num_samples):
 
 
 if __name__ == '__main__':
-    main(num_samples=10000)
+    main(num_samples=20000)

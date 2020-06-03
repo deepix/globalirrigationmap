@@ -13,7 +13,10 @@ import ee
 
 # v1: use land cover feature
 # v2a: use EVI amplitude etc from MCD12Q2.006
-model_snapshot_version = "post_mids_v2a"
+# v3: ternary labels, remove MCD12Q2.006
+# v3a: add back MCD12Q2.006, because kappa became 0.47
+#  - abandoned because other features were lost
+model_snapshot_version = "post_mids_v3"
 # Create this directory ahead of time
 base_asset_directory = "users/deepakna/w210_irrigated_croplands"
 #
@@ -34,15 +37,9 @@ dataset_list = [
         'datasetLabel': "IDAHO_EPSCOR/TERRACLIMATE",
         'allBands': ["aet", "def", "pdsi", "pet", 'pr', 'soil', "srad", "swe", "tmmn", 'tmmx', 'vap', 'vpd', 'vs'],
         # v1
-        'selectedBands': ["tmmx", "pet", "vpd"],
+        'selectedBands': ["tmmx", "pet", "pdsi", "vs"],
         'summarizer': "mean",
         'missingValues': -9999
-    },
-    {
-        'datasetLabel': "NASA/GRACE/MASS_GRIDS/LAND",
-        'allBands': ["lwe_thickness_jpl"],
-        'selectedBands': [],
-        'summarizer': "mean"
     },
     {
         'datasetLabel': "NASA/GLDAS/V021/NOAH/G025/T3H",
@@ -54,7 +51,7 @@ dataset_list = [
                   "SoilTMP10_40cm_inst", "SoilTMP100_200cm_inst", "SoilTMP40_100cm_inst", "Swnet_tavg", "Tair_f_inst",
                   "Tveg_tavg", "Wind_f_inst"],
         # v1
-        'selectedBands': ["Albedo_inst", "Tveg_tavg"],
+        'selectedBands': ["Albedo_inst", "Psurf_f_inst", "Tveg_tavg"],
         'summarizer': "mean",
         'missingValues': -9999
     },
@@ -68,7 +65,7 @@ dataset_list = [
     {
         'datasetLabel': "MODIS/006/MCD12Q1",
         'allBands': ["LC_Type1", "LC_Type2"],
-        'selectedBands': ["LC_Type1", "LC_Type2"],
+        'selectedBands': ["LC_Type2"],
         'summarizer': "max",
         'minYear': '2001',
         'missingValues': -9999
@@ -78,7 +75,7 @@ dataset_list = [
         'allBands': ['NumCycles', "EVI_Minimum_1", "EVI_Minimum_2", "EVI_Amplitude_1", "EVI_Amplitude_2"],
         'allDateBands': ["Greenup_1", "Greenup_2", "MidGreenup_1", "MidGreenup_2", "Peak_1", "Peak_2",
                          "MidGreendown_1", "MidGreendown_2", "Senescence_1", "Senescence_2"],
-        'selectedBands': ["EVI_Amplitude_1"],
+        'selectedBands': [],
         'summarizer': "mean",
         'minYear': '2001',
         'maxYear': '2017',
@@ -111,7 +108,7 @@ model_regions = [
     "world1",
     "world2"
 ]
-model_scale = 8000
+model_scale = 9276      # 5 arc min at equator
 
 
 def get_features_from_dataset(dataset, which, model_year, region_fc):
@@ -233,11 +230,9 @@ def get_features_image(region_fc, model_year, which):
 
 def get_labels(region_fc):
     if label_type == "MIRCA2K":
-        label_image = ee.Image(f"{base_asset_directory}/mc4MaxIrrigatedHaLabels") \
+        label_image = ee.Image(f"{base_asset_directory}/tlabels") \
             .clipToCollection(region_fc)
-        return label_image \
-            .select(['b1'], ['IRRIGATED']) \
-            .expression('LABEL = b("IRRIGATED")')
+        return label_image
     elif label_type == "GFSAD1000":
         label_image = ee.Image('USGS/GFSAD1000_V0') \
             .select('landcover') \

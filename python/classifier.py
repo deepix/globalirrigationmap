@@ -14,7 +14,7 @@ def assess_model(classifier, test_partition):
 
     # Get a confusion matrix representing expected accuracy.
     if classifier.mode() != 'PROBABILITY':
-        validation_matrix = validated.errorMatrix('BLABEL', 'classification')
+        validation_matrix = validated.errorMatrix('TLABEL', 'classification')
         print('Validation error matrix: ', validation_matrix.getInfo())
         print('Validation accuracy: ', validation_matrix.accuracy().getInfo())
         print('Validation kappa: ', validation_matrix.kappa().getInfo())
@@ -26,7 +26,7 @@ def train_model(training_partition, feature_list):
     # same as in R (sampsize)
     bag_fraction = 0.63
     # derived from tuning in R (mtry)
-    variables_per_split = 4
+    variables_per_split = 8
 
     classifier = ee.Classifier.randomForest(
         numberOfTrees=num_trees,
@@ -36,7 +36,7 @@ def train_model(training_partition, feature_list):
     )
     classifier = classifier.train(
         features=training_partition,
-        classProperty='BLABEL',
+        classProperty='TLABEL',
         inputProperties=feature_list,
         subsamplingSeed=10
     )
@@ -84,18 +84,18 @@ def create_classifier(features_image, labels_image, sample_points):
     # if labels_image is not None:
     #     assess_model(classifier, split['test_partition'])
     # GEE doesn't allow us to save a model so we always train the model
-    classifier = classifier.setOutputMode('PROBABILITY')
+    # classifier = classifier.setOutputMode('PROBABILITY')
     # classifier = train_model(split['training_partition'], feature_list)
     return classifier
 
 
 def build_worldwide_model():
-    num_samples = 10000  # 10000 samples to train the model
+    num_samples = 20000  # 10000 samples to train the model
     sample_points = get_worldwide_sample_points(num_samples)
     training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
     features_list = get_selected_features()
     features_image = training_image.select(features_list)
-    labels_image = get_binary_labels(training_image.select("LABEL"))
+    labels_image = training_image.select("TLABEL")
     classifier = create_classifier(features_image, labels_image, sample_points)
     return classifier
 
@@ -120,7 +120,7 @@ def classify_year(classifier, model_year):
 def main():
     ee.Initialize()
     classifier = build_worldwide_model()
-    model_years = ['2000', '2003', '2006', '2009', '2012', '2015', '2018']
+    model_years = ['2000'] # , '2003', '2006', '2009', '2012', '2015', '2018']
     tasks = []
     for year in model_years:
         task = classify_year(classifier, year)
