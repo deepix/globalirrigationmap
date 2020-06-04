@@ -26,7 +26,8 @@ def export_selected_features_for_year(model_year):
 
 def main():
     ee.Initialize()
-    model_years = [2000] # range(2001, 2020)
+    # done: 2001-2009
+    model_years = range(2010, 2020)
     tasks = []
     for year in model_years:
         task = export_selected_features_for_year(str(year))

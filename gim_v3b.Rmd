@@ -1,0 +1,240 @@
+---
+title: "Sample data from GEE for irrigated cropland analysis"
+output:
+  pdf_document: default
+  pdf: default
+  html_document:
+    df_print: paged
+---
+
+### Introduction to the dataset
+
+We can read the GeoJSON below if we have the library.  Otherwise we can read the CSV which contains all the features and the label.
+
+This is obtained from a worldwide sample of 10000 points, for the year 2002.  The points were obtained proportionately on a per-region basis, so smaller continents such as Australia have smaller number of samples than say Asia or Africa.  The regions were:
+
+```javascript
+var worldRegions = [
+  "North America",
+  "Central America",
+  "South America",
+  "EuropeSansRussia",
+  "EuropeanRussia",
+  "Africa",
+  "SW Asia",
+  "Central Asia",
+  "N Asia",
+  "E Asia",
+  "SE Asia",
+  "S Asia",
+  "Australia",
+  // and New Zealand and Papua New Guinea from Oceania
+];
+```
+
+The features come from the following datasets:
+
+ * [MODIS MOD13A2](https://developers.google.com/earth-engine/datasets/catalog/MODIS_006_MOD13A2) (NDVI, EVI)
+ * [MODIS MOD09GA_NDWI](https://developers.google.com/earth-engine/datasets/catalog/MODIS_MOD09GA_NDWI) (NDWI)
+ * [NASA GRACE](https://developers.google.com/earth-engine/datasets/catalog/NASA_GRACE_MASS_GRIDS_LAND) (groundwater data)
+ * [TERRACLIMATE](https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE) (climate data)
+ * [NASA GLDAS](https://developers.google.com/earth-engine/datasets/catalog/NASA_GLDAS_V021_NOAH_G025_T3H) (land data)
+ * [NASA FLDAS](https://developers.google.com/earth-engine/datasets/catalog/NASA_FLDAS_NOAH01_C_GL_M_V001) (famine data)
+
+See the [GEE script](https://code.earthengine.google.com/?scriptPath=users%2Fdeepakna%2Fmids_w210_irrigated_cropland%3Av3%2Ffeatures.js) to understand the features better.
+
+```{r}
+library(sf)
+library(caret)
+library(dplyr)
+library(corrplot)
+library(e1071)
+library(kernlab)
+library(knitr)
+library(kableExtra)
+library(randomForest)
+library(doParallel)
+library(pROC)
+library(tibble)
+library(psych)
+
+set.seed(10)
+registerDoParallel(4)
+getDoParWorkers()
+```
+
+### EDA
+
+Let us read and have a first look at the data.
+
+```{r}
+sdf <- read_sf("data/sample_v3b.geojson")
+```
+
+```{r}
+kable(summary(sdf))
+```
+
+Let us first get rid of some unwanted columns
+
+```{r}
+df <- as.data.frame(sdf)
+```
+
+```{r}
+df <- dplyr::select(df, c(-"id", -"geometry"))
+```
+
+Let us first check if there are any columns with very little variance:
+
+```{r}
+low.var <- nearZeroVar(df, names = TRUE)
+low.var
+```
+
+We don't want to remove the label, but we can remove the constant!
+
+```{r}
+df <- dplyr::select(df, -c("constant", "swe"))
+```
+
+```{r}
+df$TLABEL <- factor(x = df$TLABEL, levels = c(0, 1, 2), labels = c("none", "lowtomid", "high"))
+```
+
+Let's check if there are any missing values, because we already encoded them with -999 during sampling:
+
+```{r}
+sum(is.na(df))
+```
+
+There are no missing values.  This is good.
+
+We will not preprocess the features at the moment, because some models are robust to skews and non-normality.  If a model needs it, we will apply pre-processing as needed.
+
+```{r}
+labels.df <- dplyr::select(df, TLABEL)
+features.df <- dplyr::select(df, -TLABEL)
+```
+
+Let's check for highly correlated features.
+
+```{r}
+correlations <- cor(features.df)
+corrplot(correlations)
+hist(features.df$Albedo_inst)
+```
+
+Let's look at the label column and create a factor variable for our models.
+
+This is a very skewed distribution.
+
+We will first try to fit a few different models with all features and see how they perform.  Then, we will do some feature selection and re-run the models.  We will select the best model.  We will do all of this in a 5-fold cross-validation set.  We will reserve 10% of the data for our final model.  This will be our test set.  We will run our model only once on it, and report our final results on it as well.
+
+### Creating data split
+
+We will use a 90:10 split for training and test sets, and 5-fold cross-validation on the training set.
+
+```{r}
+# we keep only TLABEL
+model.df <- cbind(features.df, labels.df)
+partition <- createDataPartition(y = model.df$TLABEL, p = 0.8, list = FALSE)
+training.df = model.df[partition, ]
+test.df <- model.df[-partition, ]
+```
+
+Next, we will fit three different models.  Let us set up a training-control function that does not vary across the models.  It allows us to train and evaluate them uniformly.
+
+```{r}
+# Accuracy, kappa, AUC
+# Adapted from Kuhn2013
+fiveStats <- function(...) c(multiClassSummary(...), defaultSummary(...))
+train.ctrl <- trainControl(method = "cv", number = 5, savePredictions = TRUE, summaryFunction = fiveStats, classProbs = TRUE, allowParallel = TRUE)
+model.metric <- "Kappa"
+```
+
+### Random forest
+
+Since individual models can be quirky, we can try an ensemble instead.  We will try some tuning as well.
+
+Random forests are robust to data ranges, so we don't do any preprocessing.
+
+```{r}
+model.rf <- train(TLABEL ~ ., data = training.df, method = "rf", metric = model.metric, trControl = train.ctrl)
+kable(model.rf$results)
+```
+
+```{r}
+confusionMatrix(model.rf)
+```
+
+```{r}
+kable(model.rf$bestTune)
+```
+
+### Selecting features
+
+Let's retrain the random forest model, this time with the recommended 1000 trees and a tuning length of 10.  We will then look at feature importances.
+
+```{r}
+model.rf2 <- train(TLABEL ~ ., data = training.df, method = "rf", metric = model.metric, trControl = train.ctrl, tuneLength = 10, ntree = 1000)
+kable(model.rf2$results)
+```
+
+```{r}
+plot(varImp(model.rf2))
+```
+
+```{r}
+plot(model.rf2)
+varImp(model.rf2)
+```
+
+We will start adding variables one by one based on the chart above, until we get close enough to the best kappa we have with all the variables in place.
+
+```{r}
+vi <- varImp(model.rf2)
+# >= 30 is good enough
+viTF <- vi$importance >= 30
+x <- data.frame(name = rownames(viTF), Overall = vi$importance)
+selected.features <- c("TLABEL", as.vector(x %>% dplyr::filter(Overall >= 30) %>% dplyr::pull(name)))
+selected.features
+```
+
+```{r}
+final.features.df <- training.df %>% dplyr::select(all_of(selected.features))
+model.rf3 <- train(TLABEL ~ ., data = final.features.df, method = "rf", metric = model.metric, trControl = train.ctrl, tuneLength = 10, ntree = 1000)
+kable(model.rf3$results)
+```
+
+```{r}
+plot(varImp(model.rf3, scale = FALSE))
+```
+
+We get a best kappa value of 0.55 with mtry=10.  We will select these features, based on the feature importance and above experimentation.
+
+* Tveg_tavg: Transpiration (GLDAS)
+* Y: latitude: a proxy for latitude-specific features, such as amount of sunlight, prevailing winds, etc.
+* tmmx: Maximum temperature (TERRACLIMATE)
+* vpd: Vapor pressure deficit.  It is the difference (deficit) between the amount of moisture in the air and how much moisture the air can hold when it is saturated. (TERRACLIMATE)
+* vap: Vapor pressure (TERRACLIMATE)
+* RootMoist_inst: Root zone soil moisture (GLDAS)
+* X: longitude: a proxy for longitude-specific features
+* Albedo_inst: Fraction of light reflected back to space.  Water reflects less light compared to land. (GLDAS)
+* NDVI: Green-leaf vegetation (MODIS)
+* Psurf_f_inst: Atmospheric pressure (GLDAS)
+* ECanop_tavg: Canopy water evaporation (GLDAS)
+* ESoil_tavg: Direct evaporation from bare soil (GLDAS)
+* Wind_f_inst: Wind speed (GLDAS)
+* pdsi: Palmer drought severity index (TERRACLIMATE)
+* SWdown_f_tavg: Downward short-wave radiation flux (GLDAS)
+
+### Model Assessment
+
+Let's now run it on our test set for our final assessment:
+
+```{r}
+pred.vec <- predict(model.rf3, newdata = test.df)
+pred.df <- data.frame(pred = factor(pred.vec, levels = c("none", "lowtomid", "high")), TLABEL = test.df$TLABEL)
+confusionMatrix(pred.df$pred, pred.df$TLABEL)
+```

@@ -16,13 +16,18 @@ import ee
 # v3: ternary labels, remove MCD12Q2.006
 # v3a: add back MCD12Q2.006, because kappa became 0.47
 #  - abandoned because other features were lost
-model_snapshot_version = "post_mids_v3"
+model_snapshot_version = "post_mids_v3b"
 # Create this directory ahead of time
 base_asset_directory = "users/deepakna/w210_irrigated_croplands"
-#
+
 model_snapshot_path_prefix = f"{base_asset_directory}/{model_snapshot_version}"
 model_projection = "EPSG:4326"
 num_samples = 20000
+
+# label file
+label_path = f"{base_asset_directory}/s2005tlabels"
+# label year
+label_year = '2005'
 
 # CONFIGURATION flags
 label_type = "MIRCA2K"  # or GFSAD1000
@@ -38,7 +43,7 @@ dataset_list = [
         'datasetLabel': "IDAHO_EPSCOR/TERRACLIMATE",
         'allBands': ["aet", "def", "pdsi", "pet", 'pr', 'soil', "srad", "swe", "tmmn", 'tmmx', 'vap', 'vpd', 'vs'],
         # v1
-        'selectedBands': ["tmmx", "pet", "pdsi", "vs"],
+        'selectedBands': ["tmmx", "pet", "srad", "vs"],
         'summarizer': "mean",
         'missingValues': -9999
     },
@@ -52,14 +57,14 @@ dataset_list = [
                   "SoilTMP10_40cm_inst", "SoilTMP100_200cm_inst", "SoilTMP40_100cm_inst", "Swnet_tavg", "Tair_f_inst",
                   "Tveg_tavg", "Wind_f_inst"],
         # v1
-        'selectedBands': ["Albedo_inst", "Psurf_f_inst", "Tveg_tavg"],
+        'selectedBands': ["Albedo_inst", "ESoil_tavg", "Psurf_f_inst"],
         'summarizer': "mean",
         'missingValues': -9999
     },
     {
         'datasetLabel': "MODIS/006/MOD13A2",
         'allBands': ["NDVI", "EVI"],
-        'selectedBands': ["NDVI", "EVI"],
+        'selectedBands': ["EVI"],
         'summarizer': "max",
         'missingValues': -9999
     },
@@ -71,17 +76,6 @@ dataset_list = [
         'minYear': '2001',
         'missingValues': -9999
     },
-    {
-        'datasetLabel': 'MODIS/006/MCD12Q2',
-        'allBands': ['NumCycles', "EVI_Minimum_1", "EVI_Minimum_2", "EVI_Amplitude_1", "EVI_Amplitude_2"],
-        'allDateBands': ["Greenup_1", "Greenup_2", "MidGreenup_1", "MidGreenup_2", "Peak_1", "Peak_2",
-                         "MidGreendown_1", "MidGreendown_2", "Senescence_1", "Senescence_2"],
-        'selectedBands': [],
-        'summarizer': "mean",
-        'minYear': '2001',
-        'maxYear': '2017',
-        'missingValues': -9999
-    }
 ]
 
 # We split world regions into 2 to avoid exceeding GEE geometry limits
@@ -104,10 +98,6 @@ world_regions_2 = [
     "SE Asia",
     "S Asia",
     "Caribbean"
-]
-model_regions = [
-    "world1",
-    "world2"
 ]
 model_scale = 9276      # 5 arc min at equator
 
@@ -135,7 +125,7 @@ def get_features_from_dataset(dataset, which, model_year, region_fc):
         image2 = get_features_image_from_dataset(dataset, date_features, model_year, region_fc)
         days_since_epoch = (datetime.datetime(year=int(model_year), month=1, day=1) -
                             datetime.datetime(year=1970, month=1, day=1)).days
-        new_bands = list(map(lambda b: image2.select(b).expression(f'b(0) - {days_since_epoch}'), date_features))
+        new_bands = list(map(lambda b: image2.select(b).expression(f'b(0) = b(0) - {days_since_epoch}'), date_features))
         date_bands_image = ee.Image.cat(*new_bands)
         image = image.addBands(date_bands_image)
     if 'missingValues' in dataset:
@@ -231,7 +221,7 @@ def get_features_image(region_fc, model_year, which):
 
 def get_labels(region_fc):
     if label_type == "MIRCA2K":
-        label_image = ee.Image(f"{base_asset_directory}/tlabels") \
+        label_image = ee.Image(label_path) \
             .clipToCollection(region_fc)
         return label_image
     elif label_type == "GFSAD1000":
@@ -241,12 +231,6 @@ def get_labels(region_fc):
         return label_image
     else:
         raise NotImplementedError("Unknown label type")
-
-
-def get_binary_labels(label_image):
-    # Cut-off derived from offline model analysis
-    return label_image \
-        .expression('BLABEL = (log(b("LABEL") + 1) >= 1 ? 1 : 0)')
 
 
 def get_selected_features():

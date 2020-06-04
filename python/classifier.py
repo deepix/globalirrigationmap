@@ -5,7 +5,7 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_selected_features_image, model_snapshot_path_prefix,
-                    get_selected_features, get_binary_labels, model_projection, num_samples)
+                    get_selected_features, model_projection, num_samples)
 from sampler import get_worldwide_sample_points
 
 
@@ -26,7 +26,7 @@ def train_model(training_partition, feature_list):
     # same as in R (sampsize)
     bag_fraction = 0.63
     # derived from tuning in R (mtry)
-    variables_per_split = 8
+    variables_per_split = 10
 
     classifier = ee.Classifier.randomForest(
         numberOfTrees=num_trees,
@@ -71,7 +71,7 @@ def prepare_classifier_input(features_image, labels_image, sample_points):
 
 def create_classifier(features_image, labels_image, sample_points):
     def train_test_split(data_fc):
-        split = 0.9  # Same as in R (0.9 of data for training with 5-fold cross-validation, 0.1 held out as test)
+        split = 0.8  # Same as in R (0.9 of data for training with 5-fold cross-validation, 0.1 held out as test)
         with_random = data_fc.randomColumn('random', 10)
         train_partition = with_random.filter(ee.Filter.lt('random', split))
         test_partition = with_random.filter(ee.Filter.gte('random', split))
@@ -119,7 +119,8 @@ def classify_year(classifier, model_year):
 def main():
     ee.Initialize()
     classifier = build_worldwide_model()
-    model_years = ['2000'] # , '2003', '2006', '2009', '2012', '2015', '2018']
+    import itertools
+    model_years = itertools.chain(range(2001, 2005), range(2006, 2010))
     tasks = []
     for year in model_years:
         task = classify_year(classifier, year)
