@@ -5,8 +5,8 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_selected_features_image, model_snapshot_path_prefix,
-                    get_selected_features, model_projection, num_samples)
-from sampler import get_worldwide_sample_points
+                    get_selected_features, model_projection, num_samples, train_seed)
+from sampler import get_or_create_worldwide_sample_points
 
 
 def assess_model(classifier, test_partition):
@@ -72,7 +72,7 @@ def prepare_classifier_input(features_image, labels_image, sample_points):
 def create_classifier(features_image, labels_image, sample_points):
     def train_test_split(data_fc):
         split = 0.8  # Same as in R (0.9 of data for training with 5-fold cross-validation, 0.1 held out as test)
-        with_random = data_fc.randomColumn('random', 10)
+        with_random = data_fc.randomColumn('random', train_seed)
         train_partition = with_random.filter(ee.Filter.lt('random', split))
         test_partition = with_random.filter(ee.Filter.gte('random', split))
         return dict(training_partition=train_partition, test_partition=test_partition)
@@ -90,7 +90,7 @@ def create_classifier(features_image, labels_image, sample_points):
 
 
 def build_worldwide_model():
-    sample_points = get_worldwide_sample_points()
+    sample_points = get_or_create_worldwide_sample_points(train_seed)
     training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
     features_list = get_selected_features()
     features_image = training_image.select(features_list)
@@ -119,8 +119,7 @@ def classify_year(classifier, model_year):
 def main():
     ee.Initialize()
     classifier = build_worldwide_model()
-    import itertools
-    model_years = itertools.chain(range(2001, 2005), range(2006, 2010))
+    model_years = range(2001, 2016)
     tasks = []
     for year in model_years:
         task = classify_year(classifier, year)

@@ -5,8 +5,8 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_features_image, get_labels, model_snapshot_path_prefix,
-                    export_asset_table_to_drive, model_projection, num_samples, label_year)
-from sampler import get_worldwide_sample_points
+                    export_asset_table_to_drive, model_projection, num_samples, label_year, train_seed)
+from sampler import get_or_create_worldwide_sample_points
 
 
 def create_all_features_labels_image(region_fc, model_year):
@@ -27,7 +27,7 @@ def main():
     image_asset_id = f'{model_snapshot_path_prefix}_{asset_description}_image'
     table_asset_id = f'{model_snapshot_path_prefix}_{asset_description}_table'
     ee.Initialize()
-    sample_points_fc = get_worldwide_sample_points()
+    sample_points_fc = get_or_create_worldwide_sample_points(train_seed)
 
     # Step 2/3: sample all features into an image
     features_labels_image = create_all_features_labels_image(sample_points_fc, label_year)

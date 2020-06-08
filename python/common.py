@@ -31,6 +31,8 @@ label_year = '2005'
 
 # CONFIGURATION flags
 label_type = "MIRCA2K"  # or GFSAD1000
+train_seed = 10
+assess_seed = 20
 
 dataset_list = [
     {
@@ -99,7 +101,7 @@ world_regions_2 = [
     "S Asia",
     "Caribbean"
 ]
-model_scale = 9276      # 5 arc min at equator
+model_scale = 9276.620522123105      # 5 arc min at equator
 
 
 def get_features_from_dataset(dataset, which, model_year, region_fc):
@@ -162,22 +164,29 @@ def get_features_image_from_dataset(dataset, features, model_year, region_fc):
 
 def region_boundaries(region):
     # we assume 2-characters = country FIPS code
+    fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
     if len(region) == 2:
-        fc = ee \
-            .FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filterMetadata("country_co", "equals", region)
+    elif region == "world":
+        fc = fc \
+            .filter(ee.Filter.Or(
+                ee.Filter.inList("wld_rgn", ee.List(world_regions_1 + world_regions_2)),
+                # include two relatively big countries in Oceania region
+                ee.Filter.inList("country_co", ee.List(["NZ", "PP"]))
+            ))
     elif region == "world1":
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filter(ee.Filter.inList("wld_rgn", ee.List(world_regions_1)))
     elif region == "world2":
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filter(ee.Filter.Or(
                 ee.Filter.inList("wld_rgn", ee.List(world_regions_2)),
                 # include 2 relatively big countries in Oceania region
                 ee.Filter.inList("country_co", ee.List(["NZ", "PP"]))
             ))
     else:
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filterMetadata("wld_rgn", "equals", region)
     return fc.map(lambda f: f.set("areaHa", f.geometry().area()))
 
@@ -264,6 +273,24 @@ def get_selected_features_image(model_year):
     assert (len(regions) == 2)
     one_image = ee.Image(regional_features[0]).blend(regional_features[1])
     return one_image
+
+
+def export_image_to_asset(image, asset_subpath):
+    global_geometry = ee.Geometry.Rectangle(
+        coords=[-180, -90, 180, 90],
+        geodesic=False,
+        proj=model_projection,
+    )
+    task = ee.batch.Export.image.toAsset(
+        image=image,
+        description="imageExport",
+        assetId=base_asset_directory + "/" + asset_subpath,
+        scale=model_scale,
+        region=global_geometry,
+        maxPixels=1E13,
+    )
+    task.start()
+    return task
 
 
 def export_asset_table_to_drive(asset_id):
