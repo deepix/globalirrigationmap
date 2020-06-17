@@ -101,7 +101,10 @@ world_regions_2 = [
     "S Asia",
     "Caribbean"
 ]
+
+# Both of the values below are related: don't change one without the other
 model_scale = 9276.620522123105      # 5 arc min at equator
+model_image_dimensions = "4320x2160"
 
 
 def get_features_from_dataset(dataset, which, model_year, region_fc):
@@ -288,6 +291,24 @@ def export_image_to_asset(image, asset_subpath):
         scale=model_scale,
         region=global_geometry,
         maxPixels=1E13,
+    )
+    task.start()
+    return task
+
+
+def export_image_to_drive(image, folder):
+    global_geometry = ee.Geometry.Rectangle(
+        coords=[-180, -90, 180, 90],
+        geodesic=False,
+        proj=model_projection,
+    )
+    task = ee.batch.Export.image.toDrive(
+        image=image,
+        description=folder,
+        folder=folder,
+        scale=int(model_scale),
+        # dimensions=model_image_dimensions,
+        region=global_geometry
     )
     task.start()
     return task
