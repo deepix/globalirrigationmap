@@ -26,10 +26,10 @@ def export_selected_features_for_year(model_year):
 
 def main():
     ee.Initialize()
-    model_years = ['2000', '2003', '2006', '2009', '2012', '2015', '2018']
+    model_years = range(2001, 2016)
     tasks = []
     for year in model_years:
-        task = export_selected_features_for_year(year)
+        task = export_selected_features_for_year(str(year))
         tasks.append(task)
     wait_for_task_completion(tasks)
 

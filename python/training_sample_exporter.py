@@ -5,8 +5,8 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_features_image, get_labels, model_snapshot_path_prefix,
-                    export_asset_table_to_drive, model_projection)
-from sampler import get_worldwide_sample_points
+                    export_asset_table_to_drive, model_projection, num_samples, label_year, train_seed)
+from sampler import get_or_create_worldwide_sample_points
 
 
 def create_all_features_labels_image(region_fc, model_year):
@@ -21,18 +21,16 @@ def create_all_features_labels_image(region_fc, model_year):
     return features_labels_image
 
 
-def main(num_samples):
-    model_year = '2000'     # Siebert labels
-
+def main():
     # Step 1/3: create or fetch sample points
     asset_description = f'training_sample{num_samples}_all_features_labels'
     image_asset_id = f'{model_snapshot_path_prefix}_{asset_description}_image'
     table_asset_id = f'{model_snapshot_path_prefix}_{asset_description}_table'
     ee.Initialize()
-    sample_points_fc = get_worldwide_sample_points(num_samples)
+    sample_points_fc = get_or_create_worldwide_sample_points(train_seed)
 
     # Step 2/3: sample all features into an image
-    features_labels_image = create_all_features_labels_image(sample_points_fc, model_year)
+    features_labels_image = create_all_features_labels_image(sample_points_fc, label_year)
     task = ee.batch.Export.image.toAsset(
         crs=model_projection,
         image=features_labels_image,
@@ -65,4 +63,4 @@ def main(num_samples):
 
 
 if __name__ == '__main__':
-    main(num_samples=10000)
+    main()

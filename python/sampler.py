@@ -1,6 +1,6 @@
 import ee
 from common import (region_boundaries, model_scale, wait_for_task_completion, model_projection, base_asset_directory,
-                    export_asset_table_to_drive)
+                    export_asset_table_to_drive, num_samples, train_seed)
 
 
 world_regions = [
@@ -26,12 +26,9 @@ world_regions = [
 
 
 def get_total_area():
-    return ee.Number(134050574915281.83)
-    # in case you want to verify
     all_regions = ee.FeatureCollection(list(map(region_boundaries, world_regions))).flatten()
     # compute this before doing anything else
     total_area = all_regions.aggregate_sum('areaHa').getInfo()
-    print(f"total area: {total_area}")
     return total_area
 
 
@@ -47,8 +44,8 @@ def read_sample(asset_name):
         return None
 
 
-def get_worldwide_sample_points(num_samples):
-    asset_name = f'{base_asset_directory}/samples_{num_samples}'
+def get_or_create_worldwide_sample_points(seed):
+    asset_name = f'{base_asset_directory}/samples{num_samples}_seed{seed}'
     sample_fc = read_sample(asset_name)
     if sample_fc:
         return sample_fc
@@ -68,7 +65,7 @@ def get_worldwide_sample_points(num_samples):
                 projection=model_projection,
                 scale=model_scale,
                 geometries=True,
-                seed=10
+                seed=seed
             )
         return sampled_region
 
@@ -102,8 +99,7 @@ def get_worldwide_sample_points(num_samples):
 
 def main():
     ee.Initialize()
-    num_samples = 10000
-    get_worldwide_sample_points(num_samples)
+    get_or_create_worldwide_sample_points(train_seed)
     export_asset_table_to_drive(f'{base_asset_directory}/samples_{num_samples}')
 
 

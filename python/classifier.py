@@ -5,8 +5,8 @@
 import ee
 
 from common import (model_scale, wait_for_task_completion, get_selected_features_image, model_snapshot_path_prefix,
-                    get_selected_features, get_binary_labels, model_projection)
-from sampler import get_worldwide_sample_points
+                    get_selected_features, model_projection, num_samples, train_seed)
+from sampler import get_or_create_worldwide_sample_points
 
 
 def assess_model(classifier, test_partition):
@@ -14,7 +14,7 @@ def assess_model(classifier, test_partition):
 
     # Get a confusion matrix representing expected accuracy.
     if classifier.mode() != 'PROBABILITY':
-        validation_matrix = validated.errorMatrix('BLABEL', 'classification')
+        validation_matrix = validated.errorMatrix('TLABEL', 'classification')
         print('Validation error matrix: ', validation_matrix.getInfo())
         print('Validation accuracy: ', validation_matrix.accuracy().getInfo())
         print('Validation kappa: ', validation_matrix.kappa().getInfo())
@@ -26,7 +26,7 @@ def train_model(training_partition, feature_list):
     # same as in R (sampsize)
     bag_fraction = 0.63
     # derived from tuning in R (mtry)
-    variables_per_split = 4
+    variables_per_split = 10
 
     classifier = ee.Classifier.randomForest(
         numberOfTrees=num_trees,
@@ -36,7 +36,7 @@ def train_model(training_partition, feature_list):
     )
     classifier = classifier.train(
         features=training_partition,
-        classProperty='BLABEL',
+        classProperty='TLABEL',
         inputProperties=feature_list,
         subsamplingSeed=10
     )
@@ -71,8 +71,8 @@ def prepare_classifier_input(features_image, labels_image, sample_points):
 
 def create_classifier(features_image, labels_image, sample_points):
     def train_test_split(data_fc):
-        split = 0.9  # Same as in R (0.9 of data for training with 5-fold cross-validation, 0.1 held out as test)
-        with_random = data_fc.randomColumn('random', 10)
+        split = 0.8  # Same as in R (0.9 of data for training with 5-fold cross-validation, 0.1 held out as test)
+        with_random = data_fc.randomColumn('random', train_seed)
         train_partition = with_random.filter(ee.Filter.lt('random', split))
         test_partition = with_random.filter(ee.Filter.gte('random', split))
         return dict(training_partition=train_partition, test_partition=test_partition)
@@ -84,18 +84,17 @@ def create_classifier(features_image, labels_image, sample_points):
     # if labels_image is not None:
     #     assess_model(classifier, split['test_partition'])
     # GEE doesn't allow us to save a model so we always train the model
-    classifier = classifier.setOutputMode('PROBABILITY')
+    # classifier = classifier.setOutputMode('PROBABILITY')
     # classifier = train_model(split['training_partition'], feature_list)
     return classifier
 
 
 def build_worldwide_model():
-    num_samples = 10000  # 10000 samples to train the model
-    sample_points = get_worldwide_sample_points(num_samples)
+    sample_points = get_or_create_worldwide_sample_points(train_seed)
     training_image = ee.Image(f"{model_snapshot_path_prefix}_training_sample{num_samples}_all_features_labels_image")
     features_list = get_selected_features()
     features_image = training_image.select(features_list)
-    labels_image = get_binary_labels(training_image.select("LABEL"))
+    labels_image = training_image.select("TLABEL")
     classifier = create_classifier(features_image, labels_image, sample_points)
     return classifier
 
@@ -120,7 +119,7 @@ def classify_year(classifier, model_year):
 def main():
     ee.Initialize()
     classifier = build_worldwide_model()
-    model_years = ['2000', '2003', '2006', '2009', '2012', '2015', '2018']
+    model_years = range(2001, 2016)
     tasks = []
     for year in model_years:
         task = classify_year(classifier, year)

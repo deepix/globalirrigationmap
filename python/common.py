@@ -13,15 +13,26 @@ import ee
 
 # v1: use land cover feature
 # v2a: use EVI amplitude etc from MCD12Q2.006
-model_snapshot_version = "post_mids_v2a"
+# v3: ternary labels, remove MCD12Q2.006
+# v3a: add back MCD12Q2.006, because kappa became 0.47
+#  - abandoned because other features were lost
+model_snapshot_version = "post_mids_v3b"
 # Create this directory ahead of time
 base_asset_directory = "users/deepakna/w210_irrigated_croplands"
-#
+
 model_snapshot_path_prefix = f"{base_asset_directory}/{model_snapshot_version}"
 model_projection = "EPSG:4326"
+num_samples = 20000
+
+# label file
+label_path = f"{base_asset_directory}/s2005tlabels"
+# label year
+label_year = '2005'
 
 # CONFIGURATION flags
 label_type = "MIRCA2K"  # or GFSAD1000
+train_seed = 10
+assess_seed = 20
 
 dataset_list = [
     {
@@ -34,15 +45,9 @@ dataset_list = [
         'datasetLabel': "IDAHO_EPSCOR/TERRACLIMATE",
         'allBands': ["aet", "def", "pdsi", "pet", 'pr', 'soil', "srad", "swe", "tmmn", 'tmmx', 'vap', 'vpd', 'vs'],
         # v1
-        'selectedBands': ["tmmx", "pet", "vpd"],
+        'selectedBands': ["tmmx", "pet", "srad", "vs"],
         'summarizer': "mean",
         'missingValues': -9999
-    },
-    {
-        'datasetLabel': "NASA/GRACE/MASS_GRIDS/LAND",
-        'allBands': ["lwe_thickness_jpl"],
-        'selectedBands': [],
-        'summarizer': "mean"
     },
     {
         'datasetLabel': "NASA/GLDAS/V021/NOAH/G025/T3H",
@@ -54,36 +59,25 @@ dataset_list = [
                   "SoilTMP10_40cm_inst", "SoilTMP100_200cm_inst", "SoilTMP40_100cm_inst", "Swnet_tavg", "Tair_f_inst",
                   "Tveg_tavg", "Wind_f_inst"],
         # v1
-        'selectedBands': ["Albedo_inst", "Tveg_tavg"],
+        'selectedBands': ["Albedo_inst", "ESoil_tavg", "Psurf_f_inst"],
         'summarizer': "mean",
         'missingValues': -9999
     },
     {
         'datasetLabel': "MODIS/006/MOD13A2",
         'allBands': ["NDVI", "EVI"],
-        'selectedBands': ["NDVI", "EVI"],
+        'selectedBands': ["EVI"],
         'summarizer': "max",
         'missingValues': -9999
     },
     {
         'datasetLabel': "MODIS/006/MCD12Q1",
         'allBands': ["LC_Type1", "LC_Type2"],
-        'selectedBands': ["LC_Type1", "LC_Type2"],
+        'selectedBands': ["LC_Type2"],
         'summarizer': "max",
         'minYear': '2001',
         'missingValues': -9999
     },
-    {
-        'datasetLabel': 'MODIS/006/MCD12Q2',
-        'allBands': ['NumCycles', "EVI_Minimum_1", "EVI_Minimum_2", "EVI_Amplitude_1", "EVI_Amplitude_2"],
-        'allDateBands': ["Greenup_1", "Greenup_2", "MidGreenup_1", "MidGreenup_2", "Peak_1", "Peak_2",
-                         "MidGreendown_1", "MidGreendown_2", "Senescence_1", "Senescence_2"],
-        'selectedBands': ["EVI_Amplitude_1"],
-        'summarizer': "mean",
-        'minYear': '2001',
-        'maxYear': '2017',
-        'missingValues': -9999
-    }
 ]
 
 # We split world regions into 2 to avoid exceeding GEE geometry limits
@@ -107,11 +101,10 @@ world_regions_2 = [
     "S Asia",
     "Caribbean"
 ]
-model_regions = [
-    "world1",
-    "world2"
-]
-model_scale = 8000
+
+# Both of the values below are related: don't change one without the other
+model_scale = 9276.620522123105      # 5 arc min at equator
+model_image_dimensions = "4320x2160"
 
 
 def get_features_from_dataset(dataset, which, model_year, region_fc):
@@ -137,7 +130,7 @@ def get_features_from_dataset(dataset, which, model_year, region_fc):
         image2 = get_features_image_from_dataset(dataset, date_features, model_year, region_fc)
         days_since_epoch = (datetime.datetime(year=int(model_year), month=1, day=1) -
                             datetime.datetime(year=1970, month=1, day=1)).days
-        new_bands = list(map(lambda b: image2.select(b).expression(f'b(0) - {days_since_epoch}'), date_features))
+        new_bands = list(map(lambda b: image2.select(b).expression(f'b(0) = b(0) - {days_since_epoch}'), date_features))
         date_bands_image = ee.Image.cat(*new_bands)
         image = image.addBands(date_bands_image)
     if 'missingValues' in dataset:
@@ -174,22 +167,29 @@ def get_features_image_from_dataset(dataset, features, model_year, region_fc):
 
 def region_boundaries(region):
     # we assume 2-characters = country FIPS code
+    fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
     if len(region) == 2:
-        fc = ee \
-            .FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filterMetadata("country_co", "equals", region)
+    elif region == "world":
+        fc = fc \
+            .filter(ee.Filter.Or(
+                ee.Filter.inList("wld_rgn", ee.List(world_regions_1 + world_regions_2)),
+                # include two relatively big countries in Oceania region
+                ee.Filter.inList("country_co", ee.List(["NZ", "PP"]))
+            ))
     elif region == "world1":
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filter(ee.Filter.inList("wld_rgn", ee.List(world_regions_1)))
     elif region == "world2":
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filter(ee.Filter.Or(
                 ee.Filter.inList("wld_rgn", ee.List(world_regions_2)),
                 # include 2 relatively big countries in Oceania region
                 ee.Filter.inList("country_co", ee.List(["NZ", "PP"]))
             ))
     else:
-        fc = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017") \
+        fc = fc \
             .filterMetadata("wld_rgn", "equals", region)
     return fc.map(lambda f: f.set("areaHa", f.geometry().area()))
 
@@ -233,11 +233,9 @@ def get_features_image(region_fc, model_year, which):
 
 def get_labels(region_fc):
     if label_type == "MIRCA2K":
-        label_image = ee.Image(f"{base_asset_directory}/mc4MaxIrrigatedHaLabels") \
+        label_image = ee.Image(label_path) \
             .clipToCollection(region_fc)
-        return label_image \
-            .select(['b1'], ['IRRIGATED']) \
-            .expression('LABEL = b("IRRIGATED")')
+        return label_image
     elif label_type == "GFSAD1000":
         label_image = ee.Image('USGS/GFSAD1000_V0') \
             .select('landcover') \
@@ -245,12 +243,6 @@ def get_labels(region_fc):
         return label_image
     else:
         raise NotImplementedError("Unknown label type")
-
-
-def get_binary_labels(label_image):
-    # Cut-off derived from offline model analysis
-    return label_image \
-        .expression('BLABEL = (log(b("LABEL") + 1) >= 1 ? 1 : 0)')
 
 
 def get_selected_features():
@@ -284,6 +276,42 @@ def get_selected_features_image(model_year):
     assert (len(regions) == 2)
     one_image = ee.Image(regional_features[0]).blend(regional_features[1])
     return one_image
+
+
+def export_image_to_asset(image, asset_subpath):
+    global_geometry = ee.Geometry.Rectangle(
+        coords=[-180, -90, 180, 90],
+        geodesic=False,
+        proj=model_projection,
+    )
+    task = ee.batch.Export.image.toAsset(
+        image=image,
+        description="imageExport",
+        assetId=base_asset_directory + "/" + asset_subpath,
+        scale=model_scale,
+        region=global_geometry,
+        maxPixels=1E13,
+    )
+    task.start()
+    return task
+
+
+def export_image_to_drive(image, folder):
+    global_geometry = ee.Geometry.Rectangle(
+        coords=[-180, -90, 180, 90],
+        geodesic=False,
+        proj=model_projection,
+    )
+    task = ee.batch.Export.image.toDrive(
+        image=image,
+        description=folder,
+        folder=folder,
+        scale=int(model_scale),
+        # dimensions=model_image_dimensions,
+        region=global_geometry
+    )
+    task.start()
+    return task
 
 
 def export_asset_table_to_drive(asset_id):
