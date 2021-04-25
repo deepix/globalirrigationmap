@@ -2,9 +2,10 @@
 
 This repository contains code written for global irrigation map project.  This README documents key elements of the software architecture.
 
-* See [research paper](https://www.sciencedirect.com/science/article/abs/pii/S0309170821000658) for additional details.
-* If paywalled, see [final preprint](https://www.researchgate.net/publication/350764143_A_new_dataset_of_global_irrigation_areas_from_2001_to_2015).
-* Results dataset available [on Zenodo](https://zenodo.org/record/4659476).
+* See [research paper](https://www.sciencedirect.com/science/article/abs/pii/S0309170821000658) for additional details
+* If paywalled, see [final preprint](https://www.researchgate.net/publication/350764143_A_new_dataset_of_global_irrigation_areas_from_2001_to_2015)
+* Results dataset available [on Zenodo](https://zenodo.org/record/4659476)
+* Concepts and how we built it: [this blog post](https://ndeepak.com/posts/2020-08-05-ml-on-gee/)
 
 ## Data Flow
 
